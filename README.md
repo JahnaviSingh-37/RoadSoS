@@ -1,49 +1,25 @@
-# RoadSoS - Emergency Response App
+# RoadSoS
 
-An emergency response application built with React Native (Expo) that helps users in critical situations.
+Emergency response app built with React Native. Handles drive monitoring, SOS alerts, voice activation, hospital routing, and incident reporting.
 
-## Features
-
-- **Drive Monitoring** - Real-time speed tracking and road risk detection
-- **Emergency SOS** - Quick 3-second hold to activate emergency response
-- **Voice Recognition** - Wake-word detection for hands-free SOS activation
-- **Emergency Broadcast** - Multi-channel alerts via WhatsApp, SMS, and more
-- **Hospital Routing** - AI-powered hospital selection based on severity and proximity
-- **Incident Reports** - Detailed incident documentation with automatic export
-
-## Installation
+## Setup
 
 ```bash
 npm install
-```
-
-## Running
-
-```bash
 npm start
 ```
 
-Then open in:
-- Expo Go app (scan QR code)
-- Android emulator: `a`
-- iOS simulator: `i`
-- Web browser: `w`
+Scan the QR code in Expo Go, or press `w` for web.
 
-## Building
+## Build & Deploy
 
 ```bash
-npm run build:web          # Web build
-npm run build:ios          # iOS build
-npm run build:android      # Android build
-npm run build:all          # All platforms
-```
+npm run build:web
+npm run deploy:web:vercel
 
-## Deployment
-
-```bash
-npm run deploy:web:vercel  # Deploy web to Vercel
-npm run deploy:ios         # Deploy to App Store
-npm run deploy:android     # Deploy to Play Store
+# Or for native
+npm run build:ios
+npm run build:android
 ```
 
 ## Project Structure
