@@ -1,30 +1,61 @@
 {
   "expo": {
     "name": "ROADSoS",
-    "slug": "ROADSoS",
+    "slug": "roadsos",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "roadsos",
     "userInterfaceStyle": "automatic",
+    "description": "Emergency response and medical triage app for India with real-time hospital routing and AI-powered incident analysis",
+    "owner": "roadsos",
+    "privacy": "public",
+    "platforms": ["ios", "android", "web"],
     "ios": {
-      "icon": "./assets/expo.icon"
+      "bundleIdentifier": "com.roadsos.app",
+      "icon": "./assets/expo.icon",
+      "supportsTabletMode": true,
+      "permissions": ["CAMERA", "LOCATION", "MICROPHONE", "CONTACTS"],
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "ROADSoS needs your location to find nearby hospitals and emergency services",
+        "NSMicrophoneUsageDescription": "ROADSoS uses voice recognition for Voice SOS activation",
+        "NSCameraUsageDescription": "ROADSoS can capture incident photos for evidence",
+        "NSContactsUsageDescription": "ROADSoS accesses your emergency contacts",
+        "UIBackgroundModes": ["location", "fetch"]
+      },
+      "entitlements": {
+        "aps-environment": "production"
+      }
     },
     "android": {
+      "package": "com.roadsos.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
+      "permissions": [
+        "CAMERA",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "RECORD_AUDIO",
+        "INTERNET",
+        "VIBRATE",
+        "READ_CONTACTS"
+      ],
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "name": "ROADSoS",
+      "description": "Emergency response app with AI triage"
     },
     "plugins": [
       "expo-router",
+      "expo-background-fetch",
       [
         "expo-splash-screen",
         {
@@ -39,6 +70,14 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "updates": {
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 30000
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ]
   }
 }

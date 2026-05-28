@@ -1,0 +1,74 @@
+{
+  "IN": {
+    "police": "100",
+    "ambulance": "108",
+    "fire": "101",
+    "unified": "112"
+  },
+  "US": {
+    "police": "911",
+    "ambulance": "911",
+    "fire": "911",
+    "unified": "911"
+  },
+  "UK": {
+    "police": "999",
+    "ambulance": "999",
+    "fire": "999",
+    "unified": "999"
+  },
+  "GB": {
+    "police": "999",
+    "ambulance": "999",
+    "fire": "999",
+    "unified": "999"
+  },
+  "AU": {
+    "police": "000",
+    "ambulance": "000",
+    "fire": "000",
+    "unified": "000"
+  },
+  "DE": {
+    "police": "110",
+    "ambulance": "112",
+    "fire": "112",
+    "unified": "112"
+  },
+  "FR": {
+    "police": "17",
+    "ambulance": "15",
+    "fire": "18",
+    "unified": "112"
+  },
+  "JP": {
+    "police": "110",
+    "ambulance": "119",
+    "fire": "119",
+    "unified": "119"
+  },
+  "CA": {
+    "police": "911",
+    "ambulance": "911",
+    "fire": "911",
+    "unified": "911"
+  },
+  "AE": {
+    "police": "999",
+    "ambulance": "998",
+    "fire": "997",
+    "unified": "999"
+  },
+  "SG": {
+    "police": "999",
+    "ambulance": "995",
+    "fire": "995",
+    "unified": "999"
+  },
+  "default": {
+    "police": "112",
+    "ambulance": "112",
+    "fire": "112",
+    "unified": "112"
+  }
+}

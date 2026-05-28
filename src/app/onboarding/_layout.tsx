@@ -1,17 +1,17 @@
-import { Redirect } from 'expo-router';
+import { Redirect, Stack } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
 import { isOnboardingCompleted } from '@/services/onboardingService';
 
-export default function Index() {
+export default function OnboardingLayout() {
   const [loading, setLoading] = useState(true);
   const [completed, setCompleted] = useState(false);
 
   useEffect(() => {
     let mounted = true;
 
-    async function loadStatus() {
+    async function checkOnboarding() {
       const done = await isOnboardingCompleted();
       if (!mounted) {
         return;
@@ -21,7 +21,7 @@ export default function Index() {
       setLoading(false);
     }
 
-    loadStatus();
+    checkOnboarding();
 
     return () => {
       mounted = false;
@@ -36,9 +36,15 @@ export default function Index() {
     );
   }
 
-  if (!completed) {
-    return <Redirect href="/onboarding/intro" />;
+  if (completed) {
+    return <Redirect href="/home" />;
   }
 
-  return <Redirect href="/home" />;
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="intro" />
+      <Stack.Screen name="permissions" />
+      <Stack.Screen name="preferences" />
+    </Stack>
+  );
 }

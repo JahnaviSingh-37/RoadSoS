@@ -1,52 +1,77 @@
-# Welcome to your Expo app 👋
+# RoadSoS - Emergency Response App
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+An emergency response application built with React Native (Expo) that helps users in critical situations.
 
-## Get started
+## Features
 
-1. Install dependencies
+- **Drive Monitoring** - Real-time speed tracking and road risk detection
+- **Emergency SOS** - Quick 3-second hold to activate emergency response
+- **Voice Recognition** - Wake-word detection for hands-free SOS activation
+- **Emergency Broadcast** - Multi-channel alerts via WhatsApp, SMS, and more
+- **Hospital Routing** - AI-powered hospital selection based on severity and proximity
+- **Incident Reports** - Detailed incident documentation with automatic export
 
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Installation
 
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Running
 
-### Other setup steps
+```bash
+npm start
+```
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+Then open in:
+- Expo Go app (scan QR code)
+- Android emulator: `a`
+- iOS simulator: `i`
+- Web browser: `w`
 
-## Learn more
+## Building
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+npm run build:web          # Web build
+npm run build:ios          # iOS build
+npm run build:android      # Android build
+npm run build:all          # All platforms
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Deployment
+
+```bash
+npm run deploy:web:vercel  # Deploy web to Vercel
+npm run deploy:ios         # Deploy to App Store
+npm run deploy:android     # Deploy to Play Store
+```
+
+## Project Structure
+
+```
+src/
+├── app/           - Routes (Expo Router)
+├── screens/       - Screen implementations
+├── components/    - Reusable UI components
+├── services/      - Business logic
+├── context/       - Global state
+├── hooks/         - Custom hooks
+├── utils/         - Utilities
+└── data/          - Mock data
+```
+
+## Technologies
+
+- React Native with Expo
+- TypeScript
+- Expo Router for navigation
+- Web Speech API for voice recognition
+- React Context for state management
+- AsyncStorage for persistence
+
+## License
+
+MIT
 
 ## Join the community
 
