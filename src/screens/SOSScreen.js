@@ -49,12 +49,11 @@ async function playBeep() {
       const [incidentIndex, setIncidentIndex] = useState(0);
       const tickerPulse = useRef(new Animated.Value(0)).current;
       const [voiceListening, setVoiceListening] = useState(false);
-      const [voiceStatus, setVoiceStatus] = useState('Voice SOS off');
+      const [voiceStatus, setVoiceStatus] = useState('Voice SOS ready');
+      const [voiceTranscript, setVoiceTranscript] = useState('');
       const recognitionRef = useRef(null);
-      const wakeWordHitsRef = useRef(0);
-      const wakeWordWindowRef = useRef(null);
+      const wakeWordHitsRef = useRef([]);
       const descriptionStopRef = useRef(null);
-      const transcriptBufferRef = useRef('');
 
       useEffect(() => {
         // time updater
@@ -114,7 +113,7 @@ async function playBeep() {
 
         const SpeechRecognition = window.webkitSpeechRecognition || window.SpeechRecognition;
         if (!SpeechRecognition) {
-          setVoiceStatus('Web Speech API unavailable');
+          setVoiceStatus('Voice API unavailable');
           return undefined;
         }
 
@@ -122,26 +121,33 @@ async function playBeep() {
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = 'en-US';
-        recognition.maxAlternatives = 1;
 
         recognition.onstart = () => {
           setVoiceListening(true);
-          setVoiceStatus('Listening for HELP or SOS');
+          setVoiceStatus('🎤 Listening...');
+          setVoiceTranscript('');
         };
 
-        recognition.onerror = () => {
+        recognition.onerror = (event) => {
           setVoiceListening(false);
-          setVoiceStatus('Voice SOS paused');
+          if (event.error !== 'no-speech') {
+            setVoiceStatus('Retrying...');
+            setTimeout(() => {
+              try {
+                recognition.start();
+              } catch {}
+            }, 500);
+          }
         };
 
         recognition.onend = () => {
           setVoiceListening(false);
           if (preferences.voiceSosEnabled) {
-            try {
-              recognition.start();
-            } catch {
-              setVoiceStatus('Voice SOS waiting');
-            }
+            setTimeout(() => {
+              try {
+                recognition.start();
+              } catch {}
+            }, 300);
           }
         };
 
@@ -149,19 +155,22 @@ async function playBeep() {
           const transcript = Array.from(event.results)
             .map((result) => result[0]?.transcript ?? '')
             .join(' ')
-            .toUpperCase();
+            .trim();
 
-          transcriptBufferRef.current = transcript;
-          const wakeHits = (transcript.match(/\b(HELP|SOS)\b/g) || []).length;
+          setVoiceTranscript(transcript);
+          const upperTranscript = transcript.toUpperCase();
+          
+          const hasHelp = /\bhelp\b/i.test(transcript);
+          const hasSos = /\bsos\b/i.test(transcript);
+          const hasEmergency = /\bemergency\b/i.test(transcript);
 
-          if (wakeHits >= 3 && !wakeWordWindowRef.current) {
-            wakeWordWindowRef.current = setTimeout(() => {
-              wakeWordHitsRef.current = 0;
-              wakeWordWindowRef.current = null;
-            }, 8000);
+          if (hasHelp || hasSos || hasEmergency) {
+            wakeWordHitsRef.current.push({ time: Date.now(), word: transcript });
+            wakeWordHitsRef.current = wakeWordHitsRef.current.filter(h => Date.now() - h.time < 10000);
 
-            wakeWordHitsRef.current = wakeHits;
-            void beginVoiceSOS();
+            if (wakeWordHitsRef.current.length >= 1) {
+              void beginVoiceSOS(transcript);
+            }
           }
         };
 
@@ -169,15 +178,13 @@ async function playBeep() {
         try {
           recognition.start();
         } catch {
-          setVoiceStatus('Voice SOS waiting');
+          setVoiceStatus('Ready');
         }
 
         return () => {
           try {
             recognition.stop();
-          } catch {
-            // ignore
-          }
+          } catch {}
           recognitionRef.current = null;
         };
       }, [preferences.voiceSosEnabled]);
@@ -248,10 +255,15 @@ async function playBeep() {
         router.push(`/triage-ai?${query}`);
       }
 
-      async function beginVoiceSOS() {
-        setVoiceStatus('Voice SOS activated — say your emergency');
-        Vibration.vibrate([0, 350, 150, 350]);
+      async function beginVoiceSOS(triggerWord = '') {
+        setVoiceStatus('✓ Emergency activated - describe your situation (10 sec)');
+        Vibration.vibrate([0, 200, 100, 200]);
         void playBeep();
+        
+        try {
+          recognitionRef.current?.stop?.();
+        } catch {}
+
         AsyncStorage.setItem('lastIncidentAt', String(Date.now())).catch(() => null);
         startIncidentSession({
           trigger: 'Voice SOS',
@@ -263,15 +275,9 @@ async function playBeep() {
           },
         });
 
-        try {
-          recognitionRef.current?.stop?.();
-        } catch {
-          // ignore
-        }
-
         const SpeechRecognition = Platform.OS === 'web' ? window.webkitSpeechRecognition || window.SpeechRecognition : null;
         if (!SpeechRecognition) {
-          routeToTriage('voice sos activated');
+          routeToTriage('Voice SOS activated, emergency assistance needed');
           return;
         }
 
@@ -279,27 +285,39 @@ async function playBeep() {
         descriptionRecognition.continuous = true;
         descriptionRecognition.interimResults = true;
         descriptionRecognition.lang = 'en-US';
-        const transcriptParts = [];
+        
+        let finalDescription = triggerWord;
+        let silenceCount = 0;
+        let lastTranscriptTime = Date.now();
 
         descriptionRecognition.onresult = (event) => {
-          const text = Array.from(event.results)
+          const results = Array.from(event.results);
+          const transcript = results
             .map((result) => result[0]?.transcript ?? '')
             .join(' ')
             .trim();
-          if (text) {
-            transcriptParts.push(text);
+            
+          if (transcript) {
+            finalDescription = transcript;
+            silenceCount = 0;
+            lastTranscriptTime = Date.now();
+            setVoiceTranscript(transcript);
           }
         };
 
+        descriptionRecognition.onerror = () => {
+          silenceCount++;
+        };
+
         descriptionRecognition.start();
+
         descriptionStopRef.current = setTimeout(() => {
           try {
             descriptionRecognition.stop();
-          } catch {
-            // ignore
-          }
-          const description = transcriptParts.join(' ').trim() || 'Voice SOS, emergency assistance needed.';
-          setVoiceStatus('Routing to triage');
+          } catch {}
+
+          const description = finalDescription || 'Emergency assistance needed';
+          setVoiceStatus('Routing to triage...');
           routeToTriage(description);
         }, 10000);
       }
@@ -389,6 +407,9 @@ async function playBeep() {
           <View style={styles.voiceBanner}>
             <Text style={styles.voiceBannerTitle}>Voice SOS</Text>
             <Text style={styles.voiceBannerText}>{voiceStatus}</Text>
+            {voiceTranscript && (
+              <Text style={styles.voiceTranscriptText}>"{voiceTranscript}"</Text>
+            )}
           </View>
 
           <View style={styles.locationCard}>
@@ -545,6 +566,7 @@ async function playBeep() {
       voiceBanner: { marginTop: 10, padding: 10, borderRadius: 12, backgroundColor: '#111827', borderWidth: 1, borderColor: '#1F2937' },
       voiceBannerTitle: { color: '#fff', fontWeight: '900', fontSize: 13 },
       voiceBannerText: { color: '#CBD5E1', fontSize: 12, marginTop: 2 },
+      voiceTranscriptText: { color: '#A78BFA', fontSize: 12, marginTop: 6, fontStyle: 'italic' },
       topTime: { color: '#fff', fontSize: 16, fontWeight: '600' },
       batteryIcon: { flexDirection: 'row', alignItems: 'center' },
       batCell: { width: 8, height: 16, backgroundColor: '#9CA3AF', marginLeft: 2, borderRadius: 2 },
