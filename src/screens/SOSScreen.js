@@ -1,623 +1,323 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Audio } from 'expo-av';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, Linking, Platform, Pressable, Share, StyleSheet, Text, Vibration, View } from 'react-native';
+import { Animated, Linking, Pressable, Share, StyleSheet, Text, Vibration, View } from 'react-native';
 
-import EmergencyMantra from '@/components/EmergencyMantra';
 import { useAppContext } from '@/context/AppContext';
 import { MOCK_INCIDENT_FEED } from '@/data/mockIncidents';
+import { startEmergencyFlow } from '@/services/emergencyOrchestrator';
 
-function countryToFlagEmoji(countryCode) {
-      if (!countryCode) return '';
-      return countryCode
-        .toUpperCase()
-        .split('')
-        .map((c) => String.fromCodePoint(127397 + c.charCodeAt()))
-        .join('');
-    }
+const FLAG_MAP = { IN: '🇮🇳', US: '🇺🇸', GB: '🇬🇧' };
 
-async function playBeep() {
-  try {
-    const sound = await Audio.Sound.createAsync(
-      { uri: 'https://actions.google.com/sounds/v1/alarms/beep_short.ogg' },
-      { shouldPlay: true, volume: 0.8 }
-    );
-    setTimeout(() => sound.sound?.unloadAsync?.().catch(() => null), 2000);
-  } catch {
-    // Beep is best-effort for demo mode.
+export default function SOSScreen() {
+  const router = useRouter();
+  const { startIncidentSession } = useAppContext();
+  
+  const [loc, setLoc] = useState(null);
+  const [pm, setPm] = useState(null);
+  const [time, setTime] = useState(new Date().toLocaleTimeString());
+  const [holding, setHolding] = useState(false);
+  const [help, setHelp] = useState(null);
+  const [demo, setDemo] = useState(false);
+  const [lastSOS, setLastSOS] = useState(null);
+  const [idx, setIdx] = useState(0);
+
+  const holdRef = useRef(null);
+  const holdProg = useRef(new Animated.Value(0)).current;
+  const pulse = useRef(new Animated.Value(0)).current;
+  const ticker = useRef(new Animated.Value(0)).current;
+
+  // Update clock
+  useEffect(() => {
+    const t = setInterval(() => setTime(new Date().toLocaleTimeString()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Setup GPS & location
+  useEffect(() => {
+    (async () => {
+      try {
+        const dm = await AsyncStorage.getItem('demoMode');
+        setDemo(dm === 'true');
+        const last = await AsyncStorage.getItem('lastIncidentAt');
+        if (last) setLastSOS(Number(last));
+
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        setLoc(pos.coords);
+
+        const geocode = await Location.reverseGeocodeAsync(pos.coords).catch(() => null);
+        if (geocode?.[0]) setPm(geocode[0]);
+
+        // Watch for updates
+        const sub = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.High, distanceInterval: 10 },
+          (p) => setLoc(p.coords)
+        );
+        return () => sub.remove();
+      } catch (e) {
+        // GPS unavailable
+      }
+    })();
+  }, []);
+
+  // Pulse animation
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 1000, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 1000, useNativeDriver: true }),
+      ])
+    ).start();
+  }, [pulse]);
+
+  // Incident feed ticker
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(ticker, { toValue: 1, duration: 900, useNativeDriver: true }),
+        Animated.timing(ticker, { toValue: 0, duration: 900, useNativeDriver: true }),
+      ])
+    ).start();
+
+    const t = setInterval(() => {
+      setIdx((i) => (i + 1) % MOCK_INCIDENT_FEED.length);
+    }, 3500);
+    return () => clearInterval(t);
+  }, [ticker]);
+
+  function onHoldStart() {
+    setHolding(true);
+    holdProg.setValue(0);
+    Animated.timing(holdProg, { toValue: 1, duration: 3000, useNativeDriver: false }).start();
+    holdRef.current = setTimeout(() => onActivateSOS(), 3000);
   }
-}
 
-    export default function SOSScreen() {
-      const router = useRouter();
-      const { currentLocation: contextLocation, setCurrentLocation, preferences, startIncidentSession, demoFlowStep, setDemoFlowStep } = useAppContext();
-      const [location, setLocation] = useState(null);
-      const [placemark, setPlacemark] = useState(null);
-      const [gpsAvailable, setGpsAvailable] = useState(false);
-      const [timeStr, setTimeStr] = useState(() => new Date().toLocaleTimeString());
-      const [holding, setHolding] = useState(false);
-      const holdTimerRef = useRef(null);
-      const holdProgressRef = useRef(new Animated.Value(0));
-      const pulseAnim = useRef(new Animated.Value(0)).current;
-      const [expandedHelp, setExpandedHelp] = useState(false);
-      const [selectedHelp, setSelectedHelp] = useState(null);
-      const [demoMode, setDemoMode] = useState(false);
-      const [lastIncidentAt, setLastIncidentAt] = useState(null);
-      const [incidentIndex, setIncidentIndex] = useState(0);
-      const tickerPulse = useRef(new Animated.Value(0)).current;
-      const [voiceListening, setVoiceListening] = useState(false);
-      const [voiceStatus, setVoiceStatus] = useState('Voice SOS ready');
-      const [voiceTranscript, setVoiceTranscript] = useState('');
-      const recognitionRef = useRef(null);
-      const wakeWordHitsRef = useRef([]);
-      const descriptionStopRef = useRef(null);
+  function onHoldEnd() {
+    setHolding(false);
+    if (holdRef.current) clearTimeout(holdRef.current);
+    Animated.timing(holdProg, { toValue: 0, duration: 200, useNativeDriver: false }).start();
+  }
 
-      useEffect(() => {
-        // time updater
-        const t = setInterval(() => setTimeStr(new Date().toLocaleTimeString()), 1000);
-        return () => clearInterval(t);
-      }, []);
+  async function onActivateSOS() {
+    onHoldEnd();
+    Vibration.vibrate(500);
+    
+    const incident = {
+      trigger: 'Button SOS',
+      location: {
+        latitude: loc?.latitude ?? 26.8467,
+        longitude: loc?.longitude ?? 80.9462,
+        address: pm?.name ? `${pm.name}, Lucknow` : 'Lucknow, India',
+      },
+    };
 
-      useEffect(() => {
-        (async () => {
-          try {
-            const dm = await AsyncStorage.getItem('demoMode');
-            setDemoMode(dm === 'true');
-            const lastIncident = await AsyncStorage.getItem('lastIncidentAt');
-            setLastIncidentAt(lastIncident ? Number(lastIncident) : null);
+    startIncidentSession(incident);
+    AsyncStorage.setItem('lastIncidentAt', String(Date.now())).catch(() => {});
+    
+    const query = loc ? `?lat=${loc.latitude}&lng=${loc.longitude}&source=button` : '?source=button';
+    router.push(`/triage-ai${query}`);
+  }
 
-            const { status } = await Location.requestForegroundPermissionsAsync();
-            if (status !== 'granted') {
-              setGpsAvailable(false);
-              return;
-            }
+  async function onQuickCall(num) {
+    try {
+      await Linking.openURL(`tel:${num}`);
+    } catch (e) {}
+  }
 
-            const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-            setLocation(pos.coords);
-            setCurrentLocation({
-              latitude: pos.coords.latitude,
-              longitude: pos.coords.longitude,
-              address: contextLocation?.address ?? 'Lucknow, India',
-              label: contextLocation?.label ?? 'Lucknow, India',
-            });
-            setGpsAvailable(true);
+  async function onShareLoc() {
+    try {
+      const text = loc 
+        ? `📍 My location: ${loc.latitude.toFixed(5)}, ${loc.longitude.toFixed(5)}`
+        : 'Location unavailable';
+      await Share.share({ message: text });
+    } catch (e) {}
+  }
 
-            const pm = await Location.reverseGeocodeAsync({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
-            setPlacemark(pm?.[0] ?? null);
+  const city = pm?.city || pm?.name || 'Unknown';
+  const flag = FLAG_MAP[pm?.isoCountryCode] || '📍';
+  const feed = MOCK_INCIDENT_FEED[idx];
+  const width = holdProg.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
 
-            const sub = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, distanceInterval: 5 }, (p) => {
-              setLocation(p.coords);
-              setCurrentLocation({
-                latitude: p.coords.latitude,
-                longitude: p.coords.longitude,
-                address: contextLocation?.address ?? 'Lucknow, India',
-                label: contextLocation?.label ?? 'Lucknow, India',
-              });
-              setGpsAvailable(true);
-            });
+  return (
+    <View style={s.root}>
+      {demo && <View style={s.demoBadge}><Text style={s.demoText}>DEMO</Text></View>}
 
-            return () => sub.remove();
-          } catch (e) {
-            setGpsAvailable(false);
-          }
-        })();
-      }, []);
+      <View style={s.topBar}>
+        <View style={s.gpsRow}>
+          <View style={[s.gpsDot, { backgroundColor: loc ? '#10B981' : '#6B7280' }]} />
+          <Text style={s.time}>{time}</Text>
+        </View>
+      </View>
 
-      useEffect(() => {
-        if (!preferences.voiceSosEnabled || Platform.OS !== 'web') {
-          return undefined;
-        }
+      <View style={s.locCard}>
+        <Text style={s.locTitle}>{city} {flag}</Text>
+        <Text style={s.coords}>
+          {loc ? `${loc.latitude.toFixed(5)}, ${loc.longitude.toFixed(5)}` : 'GPS connecting...'}
+        </Text>
+      </View>
 
-        const SpeechRecognition = window.webkitSpeechRecognition || window.SpeechRecognition;
-        if (!SpeechRecognition) {
-          setVoiceStatus('Voice API unavailable');
-          return undefined;
-        }
+      <View style={s.sosBox}>
+        <Animated.View
+          style={[
+            s.pulseRing,
+            {
+              transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.15] }) }],
+              opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.4, 0.9] }),
+            },
+          ]}
+        />
 
-        const recognition = new SpeechRecognition();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = 'en-US';
+        <Pressable
+          onPressIn={onHoldStart}
+          onPressOut={onHoldEnd}
+          onMouseDown={onHoldStart}
+          onMouseUp={onHoldEnd}
+          onMouseLeave={onHoldEnd}
+          style={s.sosBtn}
+        >
+          <Text style={s.sosText}>SOS</Text>
+        </Pressable>
 
-        recognition.onstart = () => {
-          setVoiceListening(true);
-          setVoiceStatus('🎤 Listening...');
-          setVoiceTranscript('');
-        };
+        <Animated.View style={[s.progBar, { width }]} />
+        <Text style={s.hint}>Hold 3 sec</Text>
+      </View>
 
-        recognition.onerror = (event) => {
-          setVoiceListening(false);
-          if (event.error !== 'no-speech') {
-            setVoiceStatus('Retrying...');
-            setTimeout(() => {
-              try {
-                recognition.start();
-              } catch {}
-            }, 500);
-          }
-        };
+      <View style={s.grid}>
+        <Pressable style={s.card} onPress={() => onQuickCall('108')}>
+          <Text style={s.icon}>🚑</Text>
+          <Text style={s.label}>Ambulance</Text>
+          <Text style={s.num}>108</Text>
+        </Pressable>
 
-        recognition.onend = () => {
-          setVoiceListening(false);
-          if (preferences.voiceSosEnabled) {
-            setTimeout(() => {
-              try {
-                recognition.start();
-              } catch {}
-            }, 300);
-          }
-        };
+        <Pressable style={s.card} onPress={() => onQuickCall('100')}>
+          <Text style={s.icon}>🚔</Text>
+          <Text style={s.label}>Police</Text>
+          <Text style={s.num}>100</Text>
+        </Pressable>
 
-        recognition.onresult = (event) => {
-          const transcript = Array.from(event.results)
-            .map((result) => result[0]?.transcript ?? '')
-            .join(' ')
-            .trim();
+        <Pressable style={s.card} onPress={() => onQuickCall('101')}>
+          <Text style={s.icon}>🚒</Text>
+          <Text style={s.label}>Fire</Text>
+          <Text style={s.num}>101</Text>
+        </Pressable>
 
-          setVoiceTranscript(transcript);
-          const upperTranscript = transcript.toUpperCase();
-          
-          const hasHelp = /\bhelp\b/i.test(transcript);
-          const hasSos = /\bsos\b/i.test(transcript);
-          const hasEmergency = /\bemergency\b/i.test(transcript);
+        <Pressable style={s.card} onPress={onShareLoc}>
+          <Text style={s.icon}>📍</Text>
+          <Text style={s.label}>Share Loc</Text>
+          <Text style={s.num}>—</Text>
+        </Pressable>
+      </View>
 
-          if (hasHelp || hasSos || hasEmergency) {
-            wakeWordHitsRef.current.push({ time: Date.now(), word: transcript });
-            wakeWordHitsRef.current = wakeWordHitsRef.current.filter(h => Date.now() - h.time < 10000);
-
-            if (wakeWordHitsRef.current.length >= 1) {
-              void beginVoiceSOS(transcript);
-            }
-          }
-        };
-
-        recognitionRef.current = recognition;
-        try {
-          recognition.start();
-        } catch {
-          setVoiceStatus('Ready');
-        }
-
-        return () => {
-          try {
-            recognition.stop();
-          } catch {}
-          recognitionRef.current = null;
-        };
-      }, [preferences.voiceSosEnabled]);
-
-      useEffect(() => {
-        if (!preferences.demoModeEnabled || demoFlowStep !== 'voice') {
-          return undefined;
-        }
-
-        const timer = setTimeout(() => {
-          void beginVoiceSOS();
-        }, 1000);
-
-        return () => clearTimeout(timer);
-      }, [demoFlowStep, preferences.demoModeEnabled]);
-
-      useEffect(() => {
-        // pulsing animation for SOS outer ring & gps dot
-        Animated.loop(
-          Animated.sequence([
-            Animated.timing(pulseAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
-            Animated.timing(pulseAnim, { toValue: 0, duration: 1000, useNativeDriver: true }),
-          ])
-        ).start();
-      }, [pulseAnim]);
-
-      useEffect(() => {
-        Animated.loop(
-          Animated.sequence([
-            Animated.timing(tickerPulse, { toValue: 1, duration: 900, useNativeDriver: true }),
-            Animated.timing(tickerPulse, { toValue: 0, duration: 900, useNativeDriver: true }),
-          ])
-        ).start();
-
-        const t = setInterval(() => {
-          setIncidentIndex((current) => (current + 1) % MOCK_INCIDENT_FEED.length);
-        }, 3500);
-
-        return () => clearInterval(t);
-      }, [tickerPulse]);
-
-      function startHold() {
-        setHolding(true);
-        holdProgressRef.current.setValue(0);
-        Animated.timing(holdProgressRef.current, { toValue: 1, duration: 3000, useNativeDriver: false }).start();
-        holdTimerRef.current = setTimeout(() => onActivateSOS(), 3000);
-      }
-
-      function cancelHold() {
-        setHolding(false);
-        if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
-        Animated.timing(holdProgressRef.current, { toValue: 0, duration: 200, useNativeDriver: false }).start();
-      }
-
-      function buildEmergencyQuery(description = '') {
-        const lat = location?.latitude;
-        const lng = location?.longitude;
-        const queryParts = [];
-        if (lat != null && lng != null) queryParts.push(`lat=${lat}`);
-        if (lat != null && lng != null) queryParts.push(`lng=${lng}`);
-        if (description) queryParts.push(`voice=${encodeURIComponent(description)}`);
-        queryParts.push('source=voice-sos');
-        return queryParts.join('&');
-      }
-
-      function routeToTriage(description = '') {
-        const query = buildEmergencyQuery(description);
-        router.push(`/triage-ai?${query}`);
-      }
-
-      async function beginVoiceSOS(triggerWord = '') {
-        setVoiceStatus('✓ Emergency activated - describe your situation (10 sec)');
-        Vibration.vibrate([0, 200, 100, 200]);
-        void playBeep();
-        
-        try {
-          recognitionRef.current?.stop?.();
-        } catch {}
-
-        AsyncStorage.setItem('lastIncidentAt', String(Date.now())).catch(() => null);
-        startIncidentSession({
-          trigger: 'Voice SOS',
-          location: {
-            latitude: location?.latitude,
-            longitude: location?.longitude,
-            address: placemark?.name ? `${placemark.name}, Lucknow` : 'Lucknow, India',
-            label: 'Lucknow, India',
-          },
-        });
-
-        const SpeechRecognition = Platform.OS === 'web' ? window.webkitSpeechRecognition || window.SpeechRecognition : null;
-        if (!SpeechRecognition) {
-          routeToTriage('Voice SOS activated, emergency assistance needed');
-          return;
-        }
-
-        const descriptionRecognition = new SpeechRecognition();
-        descriptionRecognition.continuous = true;
-        descriptionRecognition.interimResults = true;
-        descriptionRecognition.lang = 'en-US';
-        
-        let finalDescription = triggerWord;
-        let silenceCount = 0;
-        let lastTranscriptTime = Date.now();
-
-        descriptionRecognition.onresult = (event) => {
-          const results = Array.from(event.results);
-          const transcript = results
-            .map((result) => result[0]?.transcript ?? '')
-            .join(' ')
-            .trim();
-            
-          if (transcript) {
-            finalDescription = transcript;
-            silenceCount = 0;
-            lastTranscriptTime = Date.now();
-            setVoiceTranscript(transcript);
-          }
-        };
-
-        descriptionRecognition.onerror = () => {
-          silenceCount++;
-        };
-
-        descriptionRecognition.start();
-
-        descriptionStopRef.current = setTimeout(() => {
-          try {
-            descriptionRecognition.stop();
-          } catch {}
-
-          const description = finalDescription || 'Emergency assistance needed';
-          setVoiceStatus('Routing to triage...');
-          routeToTriage(description);
-        }, 10000);
-      }
-
-      function onActivateSOS() {
-        setHolding(false);
-        Vibration.vibrate(500);
-        AsyncStorage.setItem('lastIncidentAt', String(Date.now())).catch(() => null);
-        startIncidentSession({
-          trigger: 'Button SOS',
-          location: {
-            latitude: location?.latitude,
-            longitude: location?.longitude,
-            address: placemark?.name ? `${placemark.name}, Lucknow` : 'Lucknow, India',
-            label: 'Lucknow, India',
-          },
-        });
-        const lat = location?.latitude;
-        const lng = location?.longitude;
-        const query = lat != null && lng != null ? `?lat=${lat}&lng=${lng}&source=button-sos` : '?source=button-sos';
-        router.push(`/triage-ai${query}`);
-      }
-
-      async function quickCall(number) {
-        try {
-          const url = `tel:${number}`;
-          await Linking.openURL(url);
-        } catch (e) {
-          Alert.alert('Unable to call', `Could not call ${number}`);
-        }
-      }
-
-      async function onShareLocation() {
-        try {
-          const text = location ? `My location: ${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}` : 'Location unknown';
-          await Share.share({ message: text });
-        } catch (e) {}
-      }
-
-      const helpTips = {
-        Accident: 'Stop, check for danger, call emergency services. Do not move injured person unless necessary.',
-        Medical: 'Check responsiveness, open airway, perform CPR if needed and trained.',
-        Fire: 'Move to safety, call fire services, avoid smoke inhalation.',
-        Crime: 'Get to safe place, call police, provide location and details.'
-      };
-
-      const city = placemark?.city || placemark?.name || '';
-      const countryCode = placemark?.isoCountryCode || '';
-
-      const progressWidth = holdProgressRef.current.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
-
-      return (
-        <View style={styles.container}>
-          {demoMode && (
-            <View style={styles.demoBadge}>
-              <Text style={styles.demoBadgeText}>DEMO MODE</Text>
-            </View>
-          )}
-
-          <View style={styles.topBar}>
-            <View style={styles.gpsStatusRow}>
-              <Animated.View
-                style={[
-                  styles.gpsDotOuter,
-                  gpsAvailable && { opacity: pulseAnim.interpolate({ inputRange: [0,1], outputRange: [0.4, 1] }) },
-                ]}
-              >
-                <View style={[styles.gpsDotInner, gpsAvailable ? styles.gpsGreen : styles.gpsGray]} />
-              </Animated.View>
-              <Text style={styles.topTime}>{timeStr}</Text>
-            </View>
-
-            <View style={styles.voiceRow}>
-              <View style={[styles.voiceDot, preferences.voiceSosEnabled ? styles.voiceDotActive : styles.voiceDotInactive]} />
-              <Ionicons name="mic" size={16} color={preferences.voiceSosEnabled ? '#22C55E' : '#EF4444'} />
-              <Text style={styles.voiceLabel}>{preferences.voiceSosEnabled ? (voiceListening ? 'listening' : 'armed') : 'off'}</Text>
-            </View>
-
-            <View style={styles.batteryIcon}>
-              <View style={styles.batCell} />
-              <View style={styles.batCell} />
-              <View style={[styles.batCell, styles.batWeak]} />
-              <View style={styles.batTip} />
-            </View>
-          </View>
-
-          <View style={styles.voiceBanner}>
-            <Text style={styles.voiceBannerTitle}>Voice SOS</Text>
-            <Text style={styles.voiceBannerText}>{voiceStatus}</Text>
-            {voiceTranscript && (
-              <Text style={styles.voiceTranscriptText}>"{voiceTranscript}"</Text>
-            )}
-          </View>
-
-          <View style={styles.locationCard}>
-            <Text style={styles.locationTitle}>
-              {city} {countryToFlagEmoji(countryCode)}
-            </Text>
-            <Text style={styles.coordsText}>
-              {location ? `${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}` : 'Location unavailable'}
-            </Text>
-            <EmergencyMantra tone="dark" />
-          </View>
-
-          <View style={styles.sosContainer}>
-            <Animated.View
-              style={[
-                styles.pulseRing,
-                {
-                  transform: [{ scale: pulseAnim.interpolate({ inputRange: [0,1], outputRange: [1, 1.18] }) }],
-                  opacity: pulseAnim.interpolate({ inputRange: [0,1], outputRange: [0.45, 0.9] }),
-                },
-              ]}
-            />
-
+      {lastSOS && (
+        <View style={s.recovery}>
+          <Text style={s.recoveryTitle}>Recovery</Text>
+          <Text style={s.recoveryCopy}>
+            You had an incident {Math.max(1, Math.round((Date.now() - lastSOS) / 86400000))} days ago.
+          </Text>
+          <View style={s.recButtons}>
             <Pressable
-              onPressIn={startHold}
-              onPressOut={cancelHold}
-              onMouseDown={startHold}
-              onMouseUp={cancelHold}
-              onMouseLeave={cancelHold}
-              style={styles.sosButtonWrapper}
-              accessibilityLabel="SOS Hold Button"
+              style={[s.btn, { backgroundColor: '#10B981' }]}
+              onPress={() => {
+                setLastSOS(null);
+                AsyncStorage.removeItem('lastIncidentAt').catch(() => {});
+              }}
             >
-              <View style={styles.sosButtonInner}>
-                <Text style={styles.sosText}>SOS</Text>
-              </View>
+              <Text style={s.btnText}>Yes, recovered</Text>
             </Pressable>
-
-            <Animated.View style={[styles.holdProgress, { width: progressWidth }]} />
-
-            <Text style={styles.holdLabel}>Hold 3 seconds to activate</Text>
-          </View>
-
-          <View style={styles.quickGrid}>
-            <Pressable style={styles.quickItem} onPress={() => quickCall('108')}>
-              <Text style={styles.quickIcon}>🚑</Text>
-              <Text style={styles.quickLabel}>Ambulance</Text>
-              <Text style={styles.quickNumber}>108</Text>
+            <Pressable
+              style={[s.btn, { backgroundColor: '#1D4ED8' }]}
+              onPress={() => router.push('/nearby')}
+            >
+              <Text style={s.btnText}>Need help</Text>
             </Pressable>
-
-            <Pressable style={styles.quickItem} onPress={() => quickCall('100')}>
-              <Text style={styles.quickIcon}>🚔</Text>
-              <Text style={styles.quickLabel}>Police</Text>
-              <Text style={styles.quickNumber}>100</Text>
-            </Pressable>
-
-            <Pressable style={styles.quickItem} onPress={() => quickCall('101')}>
-              <Text style={styles.quickIcon}>🚒</Text>
-              <Text style={styles.quickLabel}>Fire</Text>
-              <Text style={styles.quickNumber}>101</Text>
-            </Pressable>
-
-            <Pressable style={styles.quickItem} onPress={onShareLocation}>
-              <Text style={styles.quickIcon}>📍</Text>
-              <Text style={styles.quickLabel}>Share Location</Text>
-              <Text style={styles.quickNumber}>—</Text>
-            </Pressable>
-          </View>
-
-          {lastIncidentAt ? (
-            <View style={styles.recoveryCard}>
-              <Text style={styles.recoveryTitle}>Recovery check</Text>
-              <Text style={styles.recoveryCopy}>
-                You had an incident {Math.max(1, Math.round((Date.now() - lastIncidentAt) / 86400000))} days ago. Are you recovered?
-              </Text>
-              <View style={styles.recoveryActions}>
-                <Pressable
-                  style={[styles.recoveryButton, styles.recoveryButtonYes]}
-                  onPress={() => {
-                    setLastIncidentAt(null);
-                    AsyncStorage.removeItem('lastIncidentAt').catch(() => null);
-                  }}
-                >
-                  <Text style={styles.recoveryButtonText}>Yes</Text>
-                </Pressable>
-                <Pressable
-                  style={[styles.recoveryButton, styles.recoveryButtonHelp]}
-                  onPress={() => router.push('/nearby')}
-                >
-                  <Text style={styles.recoveryButtonText}>Still need help</Text>
-                </Pressable>
-              </View>
-            </View>
-          ) : null}
-
-          <View style={styles.incidentFeedCard}>
-            <View style={styles.incidentFeedHeader}>
-              <Text style={styles.incidentFeedTitle}>Live incident feed</Text>
-              <Animated.Text style={[styles.incidentFeedPulse, { opacity: tickerPulse.interpolate({ inputRange: [0, 1], outputRange: [0.35, 1] }) }]}>
-                {MOCK_INCIDENT_FEED[incidentIndex].severity === 'high' ? 'LIVE' : 'UPDATING'}
-              </Animated.Text>
-            </View>
-            <Animated.View style={{ opacity: tickerPulse.interpolate({ inputRange: [0, 1], outputRange: [0.65, 1] }) }}>
-              <Text style={styles.incidentFeedText}>
-                {MOCK_INCIDENT_FEED[incidentIndex].emoji} {MOCK_INCIDENT_FEED[incidentIndex].title} — {MOCK_INCIDENT_FEED[incidentIndex].area} — {MOCK_INCIDENT_FEED[incidentIndex].minutesAgo} min ago
-              </Text>
-            </Animated.View>
-          </View>
-
-          <View style={styles.bottomPanel}>
-            <Pressable onPress={() => setExpandedHelp(!expandedHelp)} style={styles.bottomHeader}>
-              <Text style={styles.bottomTitle}>I need help with...</Text>
-              <Text style={styles.bottomToggle}>{expandedHelp ? 'Hide' : 'Show'}</Text>
-            </Pressable>
-
-            {expandedHelp && (
-              <View style={styles.helpContent}>
-                <View style={styles.chipsRow}>
-                  {Object.keys(helpTips).map((k) => (
-                    <Pressable
-                      key={k}
-                      onPress={() => setSelectedHelp(k)}
-                      style={[styles.chip, selectedHelp === k && styles.chipActive]}
-                    >
-                      <Text style={styles.chipText}>{k}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-
-                {selectedHelp && (
-                  <View style={styles.tipCard}>
-                    <Text style={styles.tipText}>{helpTips[selectedHelp]}</Text>
-                  </View>
-                )}
-              </View>
-            )}
           </View>
         </View>
-      );
-    }
+      )}
 
-    const styles = StyleSheet.create({
-      container: { flex: 1, backgroundColor: '#0a0f1e', padding: 16 },
-      topBar: { backgroundColor: '#1a1a1a', borderRadius: 10, padding: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-      gpsStatusRow: { flexDirection: 'row', alignItems: 'center' },
-      gpsDotOuter: { width: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
-      gpsDotInner: { width: 10, height: 10, borderRadius: 5 },
-      gpsGreen: { backgroundColor: '#34D399' },
-      gpsGray: { backgroundColor: '#6B7280' },
-      voiceRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-      voiceDot: { width: 8, height: 8, borderRadius: 4 },
-      voiceDotActive: { backgroundColor: '#22C55E' },
-      voiceDotInactive: { backgroundColor: '#EF4444' },
-      voiceLabel: { color: '#E2E8F0', fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
-      voiceBanner: { marginTop: 10, padding: 10, borderRadius: 12, backgroundColor: '#111827', borderWidth: 1, borderColor: '#1F2937' },
-      voiceBannerTitle: { color: '#fff', fontWeight: '900', fontSize: 13 },
-      voiceBannerText: { color: '#CBD5E1', fontSize: 12, marginTop: 2 },
-      voiceTranscriptText: { color: '#A78BFA', fontSize: 12, marginTop: 6, fontStyle: 'italic' },
-      topTime: { color: '#fff', fontSize: 16, fontWeight: '600' },
-      batteryIcon: { flexDirection: 'row', alignItems: 'center' },
-      batCell: { width: 8, height: 16, backgroundColor: '#9CA3AF', marginLeft: 2, borderRadius: 2 },
-      batWeak: { backgroundColor: '#F59E0B' },
-      batTip: { width: 4, height: 8, backgroundColor: '#9CA3AF', marginLeft: 4, borderRadius: 2 },
+      <View style={s.feedCard}>
+        <View style={s.feedHeader}>
+          <Text style={s.feedTitle}>Live feed</Text>
+          <Animated.Text style={[s.feedPulse, { opacity: ticker }]}>LIVE</Animated.Text>
+        </View>
+        <Animated.Text style={[s.feedText, { opacity: ticker }]}>
+          {feed.emoji} {feed.title} — {feed.area}
+        </Animated.Text>
+      </View>
 
-      locationCard: { backgroundColor: '#1a2035', marginTop: 12, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#111827' },
-      locationTitle: { color: '#fff', fontSize: 18, fontWeight: '700' },
-      coordsText: { color: '#D1D5DB', marginTop: 6, fontSize: 14 },
+      <View style={s.helpPanel}>
+        <Pressable onPress={() => setHelp(!help)} style={s.helpHeader}>
+          <Text style={s.helpTitle}>Help with...</Text>
+          <Text style={s.toggle}>{help ? 'Hide' : 'Show'}</Text>
+        </Pressable>
 
-      sosContainer: { alignItems: 'center', marginTop: 18, marginBottom: 8 },
-      pulseRing: { position: 'absolute', width: 220, height: 220, borderRadius: 110, borderWidth: 12, borderColor: 'rgba(204,0,0,0.12)', alignSelf: 'center' },
-      sosButtonWrapper: { zIndex: 3 },
-      sosButtonInner: { width: 160, height: 160, borderRadius: 80, backgroundColor: '#CC0000', alignItems: 'center', justifyContent: 'center', elevation: 4 },
-      sosText: { color: '#fff', fontSize: 28, fontWeight: '800' },
-      holdLabel: { color: '#E5E7EB', marginTop: 10, fontSize: 16 },
-      holdProgress: { height: 6, backgroundColor: '#E24B4A', borderRadius: 4, marginTop: 8, alignSelf: 'stretch' },
+        {help && (
+          <View style={s.tips}>
+            <Pressable style={s.chip} onPress={() => {}}>
+              <Text style={s.chipText}>Accident</Text>
+            </Pressable>
+            <Pressable style={s.chip} onPress={() => {}}>
+              <Text style={s.chipText}>Medical</Text>
+            </Pressable>
+            <Pressable style={s.chip} onPress={() => {}}>
+              <Text style={s.chipText}>Fire</Text>
+            </Pressable>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
 
-      quickGrid: { marginTop: 16, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-      quickItem: { width: '48%', backgroundColor: '#111827', padding: 12, borderRadius: 10, marginBottom: 12, alignItems: 'center' },
-      quickIcon: { fontSize: 36 },
-      quickLabel: { color: '#fff', fontSize: 18, marginTop: 6 },
-      quickNumber: { color: '#9CA3AF', marginTop: 4 },
+const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#0A0F1E', padding: 16 },
+  demoBadge: { position: 'absolute', right: 16, top: 10, backgroundColor: '#FF8C00', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, zIndex: 10 },
+  demoText: { color: '#fff', fontSize: 11, fontWeight: '700' },
 
-      recoveryCard: { marginTop: 4, backgroundColor: '#111827', borderRadius: 14, padding: 12, gap: 8 },
-      recoveryTitle: { color: '#fff', fontSize: 15, fontWeight: '900' },
-      recoveryCopy: { color: '#D1D5DB', fontSize: 13, lineHeight: 18 },
-      recoveryActions: { flexDirection: 'row', gap: 10 },
-      recoveryButton: { flex: 1, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
-      recoveryButtonYes: { backgroundColor: '#16A34A' },
-      recoveryButtonHelp: { backgroundColor: '#1D4ED8' },
-      recoveryButtonText: { color: '#fff', fontWeight: '800' },
+  topBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#141D2F', borderRadius: 10, padding: 12, marginBottom: 12 },
+  gpsRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  gpsDot: { width: 10, height: 10, borderRadius: 5 },
+  time: { color: '#fff', fontSize: 14, fontWeight: '600' },
 
-      incidentFeedCard: { marginTop: 4, backgroundColor: '#0F172A', borderRadius: 14, padding: 12, gap: 8 },
-      incidentFeedHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-      incidentFeedTitle: { color: '#fff', fontSize: 15, fontWeight: '900' },
-      incidentFeedPulse: { color: '#FDE68A', fontWeight: '900', fontSize: 12, letterSpacing: 1 },
-      incidentFeedText: { color: '#E2E8F0', fontSize: 13, lineHeight: 18 },
+  locCard: { backgroundColor: '#141D2F', padding: 16, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: '#1E2A3D' },
+  locTitle: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  coords: { color: '#8892A4', fontSize: 12, marginTop: 4 },
 
-      bottomPanel: { marginTop: 6, backgroundColor: 'transparent' },
-      bottomHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 },
-      bottomTitle: { color: '#fff', fontSize: 16, fontWeight: '700' },
-      bottomToggle: { color: '#9CA3AF' },
-      helpContent: { marginTop: 8 },
-      chipsRow: { flexDirection: 'row', justifyContent: 'space-between' },
-      chip: { paddingVertical: 10, paddingHorizontal: 12, backgroundColor: '#111827', borderRadius: 8, marginRight: 8 },
-      chipActive: { backgroundColor: '#23304a' },
-      chipText: { color: '#fff', fontSize: 16 },
-      tipCard: { marginTop: 10, backgroundColor: '#111827', padding: 12, borderRadius: 8 },
-      tipText: { color: '#E5E7EB', fontSize: 16 },
+  sosBox: { alignItems: 'center', marginVertical: 20 },
+  pulseRing: { position: 'absolute', width: 220, height: 220, borderRadius: 110, borderWidth: 12, borderColor: 'rgba(204,0,0,0.12)' },
+  sosBtn: { width: 160, height: 160, borderRadius: 80, backgroundColor: '#CC0000', alignItems: 'center', justifyContent: 'center', zIndex: 2, elevation: 8 },
+  sosText: { color: '#fff', fontSize: 32, fontWeight: '800' },
+  progBar: { height: 6, backgroundColor: '#E24B4A', borderRadius: 4, marginTop: 12, alignSelf: 'stretch' },
+  hint: { color: '#8892A4', fontSize: 13, marginTop: 8, fontWeight: '500' },
 
-      demoBadge: { position: 'absolute', right: 18, top: 10, backgroundColor: '#FF8C00', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, zIndex: 10 },
-      demoBadgeText: { color: '#fff', fontWeight: '700' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 16 },
+  card: { width: '48%', backgroundColor: '#141D2F', padding: 16, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#1E2A3D' },
+  icon: { fontSize: 36 },
+  label: { color: '#fff', fontSize: 14, marginTop: 8, fontWeight: '600' },
+  num: { color: '#8892A4', fontSize: 12, marginTop: 4 },
+
+  recovery: { backgroundColor: '#141D2F', padding: 16, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: '#1E2A3D' },
+  recoveryTitle: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  recoveryCopy: { color: '#8892A4', fontSize: 13, marginTop: 8, lineHeight: 18 },
+  recButtons: { flexDirection: 'row', gap: 12, marginTop: 12 },
+  btn: { flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
+  btnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+
+  feedCard: { backgroundColor: '#0F172A', padding: 16, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: '#1E2A3D' },
+  feedHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  feedTitle: { color: '#fff', fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  feedPulse: { color: '#FFB800', fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1 },
+  feedText: { color: '#E2E8F0', fontSize: 13, lineHeight: 18 },
+
+  helpPanel: { backgroundColor: 'transparent', marginBottom: 12 },
+  helpHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 },
+  helpTitle: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  toggle: { color: '#8892A4', fontSize: 12 },
+  tips: { flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap' },
+  chip: { paddingVertical: 8, paddingHorizontal: 12, backgroundColor: '#141D2F', borderRadius: 8, borderWidth: 1, borderColor: '#1E2A3D' },
+  chipText: { color: '#fff', fontSize: 12 },
 });

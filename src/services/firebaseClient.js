@@ -1,7 +1,5 @@
 const mockSosStore = {};
 
-console.log('Mock Firebase active');
-
 export function saveSOSLocation(sessionId, coords) {
   if (!sessionId) {
     throw new Error('sessionId is required');

@@ -2,240 +2,122 @@ import { Audio } from 'expo-av';
 import { Accelerometer } from 'expo-sensors';
 import { Alert, Vibration } from 'react-native';
 
-const SAMPLE_INTERVAL_MS = 100;
-const CRASH_PERSISTENCE_MS = 200;
-const AUTO_SOS_COUNTDOWN_SECONDS = 15;
-const CRASH_COOLDOWN_MS = 10_000;
+// 4.2G = empirical crash threshold
+const THRESHOLDS = { low: 4.2, medium: 3.5, high: 2.8 };
+const WINDOW_MS = 200;  // how long over threshold before firing
+const COUNTDOWN_SEC = 15;
+const DEBOUNCE_MS = 10_000;
 
-const SENSITIVITY_THRESHOLDS = {
-  low: 4.2,
-  medium: 3.5,
-  high: 2.8,
-};
+let sensitivity = 'medium';
+let accel = null;
+let exceedStart = null;
+let countdown = null;
+let sound = null;
+let active = false;
+let lastCrash = 0;
+let handlers = {};
 
-let activeSensitivity = 'medium';
-let accelerometerSubscription = null;
-let exceedStartTimestamp = null;
-let countdownInterval = null;
-let alertSound = null;
-let crashPromptActive = false;
-let lastCrashTimestamp = 0;
-
-let runtimeHandlers = {
-  onCrashPromptUpdate: null,
-  onAutoSOS: null,
-  onCrashDetected: null,
-  onError: null,
-};
-
-function getThreshold() {
-  return SENSITIVITY_THRESHOLDS[activeSensitivity] ?? SENSITIVITY_THRESHOLDS.medium;
+function g() {
+  return THRESHOLDS[sensitivity] ?? THRESHOLDS.medium;
 }
 
-function emitPromptState(state) {
-  runtimeHandlers.onCrashPromptUpdate?.(state);
+function emit(state) {
+  handlers.onUpdate?.(state);
 }
 
-function clearCountdown() {
-  if (countdownInterval) {
-    clearInterval(countdownInterval);
-    countdownInterval = null;
-  }
-}
-
-async function unloadAlertSound() {
-  if (!alertSound) {
-    return;
-  }
-
+async function playSound() {
   try {
-    await alertSound.unloadAsync();
-  } catch {
-    // Ignore unload errors because sound disposal should not crash monitoring.
-  }
-
-  alertSound = null;
-}
-
-async function playAlertSound() {
-  try {
-    await Audio.setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: false,
-    });
-
-    const result = await Audio.Sound.createAsync(
+    await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
+    const { sound: s } = await Audio.Sound.createAsync(
       { uri: 'https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg' },
-      { shouldPlay: true, volume: 1.0 }
+      { shouldPlay: true, volume: 1 }
     );
-
-    alertSound = result.sound;
-  } catch (error) {
-    runtimeHandlers.onError?.(error);
+    sound = s;
+  } catch (e) {
+    handlers.onError?.(e);
   }
 }
 
-function dismissCrashPrompt() {
-  crashPromptActive = false;
-  clearCountdown();
-  exceedStartTimestamp = null;
+function dismiss() {
+  active = false;
+  exceedStart = null;
+  if (countdown) clearInterval(countdown);
   Vibration.cancel();
-
-  emitPromptState({
-    visible: false,
-    secondsLeft: 0,
-    dismiss: dismissCrashPrompt,
-  });
+  emit({ visible: false, sec: 0 });
 }
 
-function runAutoSosTrigger() {
-  dismissCrashPrompt();
-  runtimeHandlers.onAutoSOS?.();
-}
-
-function startCrashPrompt() {
-  crashPromptActive = true;
-  let secondsLeft = AUTO_SOS_COUNTDOWN_SECONDS;
-
-  emitPromptState({
-    visible: true,
-    secondsLeft,
-    dismiss: dismissCrashPrompt,
-  });
-
-  if (!runtimeHandlers.onCrashPromptUpdate) {
-    Alert.alert(
-      'Crash detected',
-      `Possible crash detected. SOS will trigger in ${AUTO_SOS_COUNTDOWN_SECONDS} seconds.`,
-      [{ text: 'Dismiss', style: 'cancel', onPress: dismissCrashPrompt }]
-    );
+function countdown_tick() {
+  active = true;
+  let sec = COUNTDOWN_SEC;
+  emit({ visible: true, sec });
+  
+  if (!handlers.onUpdate) {
+    Alert.alert('Crash!', `SOS in ${COUNTDOWN_SEC}s`, [{ text: 'Cancel', onPress: dismiss }]);
   }
 
-  clearCountdown();
-  countdownInterval = setInterval(() => {
-    secondsLeft -= 1;
-
-    if (secondsLeft <= 0) {
-      runAutoSosTrigger();
-      return;
+  if (countdown) clearInterval(countdown);
+  countdown = setInterval(() => {
+    sec--;
+    if (sec <= 0) {
+      handlers.onSos?.();
+      dismiss();
+    } else {
+      emit({ visible: true, sec });
     }
-
-    emitPromptState({
-      visible: true,
-      secondsLeft,
-      dismiss: dismissCrashPrompt,
-    });
   }, 1000);
 }
 
-export function triggerDemoCrash(handlers = {}) {
-  runtimeHandlers = {
-    ...runtimeHandlers,
-    ...handlers,
-  };
-
-  if (crashPromptActive) {
-    return;
-  }
-
-  const now = Date.now();
-  lastCrashTimestamp = now;
-  exceedStartTimestamp = null;
-
-  Vibration.vibrate([0, 500, 200, 500]);
-  void playAlertSound();
-
-  runtimeHandlers.onCrashDetected?.({
-    magnitude: getThreshold(),
-    threshold: getThreshold(),
-    sensitivity: activeSensitivity,
-    timestamp: now,
-    simulated: true,
-  });
-
-  startCrashPrompt();
-}
-
-function handlePotentialCrash(gForceMagnitude) {
-  const now = Date.now();
-  if (crashPromptActive || now - lastCrashTimestamp < CRASH_COOLDOWN_MS) {
-    return;
-  }
-
-  const threshold = getThreshold();
-  if (gForceMagnitude < threshold) {
-    exceedStartTimestamp = null;
-    return;
-  }
-
-  if (!exceedStartTimestamp) {
-    exceedStartTimestamp = now;
-    return;
-  }
-
-  if (now - exceedStartTimestamp < CRASH_PERSISTENCE_MS) {
-    return;
-  }
-
-  lastCrashTimestamp = now;
-  exceedStartTimestamp = null;
-
-  Vibration.vibrate([0, 500, 200, 500]);
-  void playAlertSound();
-
-  runtimeHandlers.onCrashDetected?.({
-    magnitude: gForceMagnitude,
-    threshold,
-    sensitivity: activeSensitivity,
-    timestamp: now,
-  });
-
-  startCrashPrompt();
-}
-
 export function setSensitivity(level) {
-  if (!Object.prototype.hasOwnProperty.call(SENSITIVITY_THRESHOLDS, level)) {
-    throw new Error('Invalid sensitivity level. Use low, medium, or high.');
-  }
-
-  activeSensitivity = level;
+  if (!THRESHOLDS[level]) throw new Error('Bad level: low/medium/high');
+  sensitivity = level;
 }
 
-export function startMonitoring(handlers = {}) {
-  runtimeHandlers = {
-    ...runtimeHandlers,
-    ...handlers,
-  };
-
+export function startMonitoring(h = {}) {
+  handlers = h;
   stopMonitoring();
-
-  Accelerometer.setUpdateInterval(SAMPLE_INTERVAL_MS);
-  accelerometerSubscription = Accelerometer.addListener(({ x, y, z }) => {
-    const gForceMagnitude = Math.sqrt(x * x + y * y + z * z);
-    handlePotentialCrash(gForceMagnitude);
+  
+  Accelerometer.setUpdateInterval(100);
+  accel = Accelerometer.addListener(({ x, y, z }) => {
+    const mag = Math.sqrt(x * x + y * y + z * z);
+    const now = Date.now();
+    
+    if (active || now - lastCrash < DEBOUNCE_MS) return;
+    if (mag < g()) { exceedStart = null; return; }
+    
+    if (!exceedStart) { exceedStart = now; return; }
+    if (now - exceedStart < WINDOW_MS) return;
+    
+    lastCrash = now;
+    exceedStart = null;
+    Vibration.vibrate([0, 500, 200, 500]);
+    playSound();
+    handlers.onDetected?.({ g: mag, threshold: g() });
+    countdown_tick();
   });
 }
 
 export function stopMonitoring() {
-  accelerometerSubscription?.remove();
-  accelerometerSubscription = null;
-  exceedStartTimestamp = null;
-
-  clearCountdown();
-  crashPromptActive = false;
-  emitPromptState({
-    visible: false,
-    secondsLeft: 0,
-    dismiss: dismissCrashPrompt,
-  });
-
+  accel?.remove();
+  accel = null;
+  exceedStart = null;
+  if (countdown) clearInterval(countdown);
+  active = false;
+  emit({ visible: false, sec: 0 });
   Vibration.cancel();
-  void unloadAlertSound();
+  sound?.unloadAsync?.().catch(() => {});
+  sound = null;
 }
 
-export const crashDetection = {
-  startMonitoring,
-  stopMonitoring,
-  setSensitivity,
-  triggerDemoCrash,
-};
+export function triggerDemo(h = {}) {
+  handlers = { ...handlers, ...h };
+  if (active) return;
+  
+  const now = Date.now();
+  lastCrash = now;
+  Vibration.vibrate([0, 500, 200, 500]);
+  playSound();
+  handlers.onDetected?.({ g: g(), threshold: g(), demo: true });
+  countdown_tick();
+}
+
+export const crashDetection = { startMonitoring, stopMonitoring, setSensitivity, triggerDemo };
