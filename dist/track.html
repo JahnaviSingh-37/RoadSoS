@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ROADSoS Live Tracking</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: #f8fafc;
+        color: #111827;
+      }
+      .header {
+        padding: 14px 16px;
+        background: #ffffff;
+        border-bottom: 1px solid #e5e7eb;
+      }
+      .title {
+        margin: 0;
+        font-size: 18px;
+      }
+      .meta {
+        margin: 6px 0 0;
+        font-size: 13px;
+        color: #4b5563;
+      }
+      #map {
+        width: 100%;
+        height: calc(100vh - 86px);
+      }
+      .error {
+        padding: 20px;
+        color: #b91c1c;
+      }
+    </style>
+    <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY"></script>
+  </head>
+  <body>
+    <div class="header">
+      <h1 class="title">ROADSoS Live Tracking</h1>
+      <p id="meta" class="meta">Connecting...</p>
+    </div>
+    <div id="map"></div>
+    <script type="module">
+      import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.2.1/firebase-app.js';
+      import { getDatabase, onValue, ref } from 'https://www.gstatic.com/firebasejs/12.2.1/firebase-database.js';
+
+      const firebaseConfig = {
+        apiKey: 'YOUR_FIREBASE_API_KEY',
+        authDomain: 'YOUR_PROJECT_ID.firebaseapp.com',
+        databaseURL: 'https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com',
+        projectId: 'YOUR_PROJECT_ID',
+        appId: 'YOUR_APP_ID',
+      };
+
+      function getSessionIdFromUrl() {
+        const pathMatch = window.location.pathname.match(/\/track\/([^/]+)/);
+        if (pathMatch?.[1]) {
+          return decodeURIComponent(pathMatch[1]);
+        }
+
+        const queryId = new URLSearchParams(window.location.search).get('sessionId');
+        return queryId ?? null;
+      }
+
+      const sessionId = getSessionIdFromUrl();
+      const metaEl = document.getElementById('meta');
+      const mapEl = document.getElementById('map');
+
+      if (!sessionId) {
+        mapEl.innerHTML = '<div class="error">No sessionId provided in URL.</div>';
+        throw new Error('Missing sessionId');
+      }
+
+      const app = initializeApp(firebaseConfig);
+      const db = getDatabase(app);
+      const sessionRef = ref(db, `sos/${sessionId}`);
+
+      let map;
+      let marker;
+
+      function ensureMap(lat, lng) {
+        if (!map) {
+          map = new google.maps.Map(mapEl, {
+            center: { lat, lng },
+            zoom: 15,
+            mapTypeControl: false,
+            streetViewControl: false,
+          });
+          marker = new google.maps.Marker({
+            position: { lat, lng },
+            map,
+            title: 'SOS Location',
+          });
+          return;
+        }
+
+        const nextPosition = { lat, lng };
+        marker.setPosition(nextPosition);
+        map.panTo(nextPosition);
+      }
+
+      onValue(sessionRef, (snapshot) => {
+        const data = snapshot.val();
+        if (!data) {
+          metaEl.textContent = 'Session not found.';
+          return;
+        }
+
+        const latest = data.latest;
+        const lat = Number(latest?.latitude);
+        const lng = Number(latest?.longitude);
+
+        metaEl.textContent = `Session: ${sessionId} | Status: ${data.status ?? 'unknown'} | Updated: ${
+          data.lastUpdatedAt ? new Date(data.lastUpdatedAt).toLocaleString() : 'N/A'
+        }`;
+
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          ensureMap(lat, lng);
+        }
+      });
+    </script>
+  </body>
+</html>
