@@ -120,7 +120,13 @@ export async function ensureHomeLocation(currentLocation) {
 
 export async function fetchAndCacheNearbyForHome(homeLocation, apiKey) {
   if (!apiKey) {
-    throw new Error('Missing EXPO_PUBLIC_GOOGLE_MAPS_API_KEY.');
+    // Do not throw here - allow app to function without a Google Maps key
+    // (useful for local dev or users who don't want to provide a key).
+    // Upstream callers may still attempt a fetch, so return null to indicate
+    // that no offline cache was created.
+    // eslint-disable-next-line no-console
+    console.warn('Skipping nearby fetch: missing EXPO_PUBLIC_GOOGLE_MAPS_API_KEY.');
+    return null;
   }
 
   const categoryKeys = ['Hospital', 'Police', 'Fire'];
